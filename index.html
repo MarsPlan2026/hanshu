@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>函数刀锋：完美修复版 - FUNCTION BLADE</title>
+    <style>
+        /* CRITICAL FIX: 彻底清除浏览器边距，防止 Canvas 偏移 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #ffffff;
+            color: #000000;
+            font-family: monospace;
+            user-select: none;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 5%;
+            display: flex;
+            justify-content: space-between;
+            width: 90%;
+            font-size: 20px;
+            font-weight: bold;
+            border-bottom: 2px solid #000000;
+            padding-bottom: 5px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #weapon-bar {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            background: #ffffff;
+            padding: 10px;
+            border: 2px solid #000000;
+            z-index: 10;
+        }
+        .weapon-btn {
+            border: 1px solid #000000;
+            background: #ffffff;
+            color: #000000;
+            padding: 8px 12px;
+            font-family: monospace;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .weapon-btn.active {
+            background: #000000;
+            color: #ffffff;
+        }
+        canvas {
+            display: block;
+            background-color: #ffffff;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div>SCORE: <span id="score">0000</span></div>
+        <div>HP: <span id="hp">100</span>%</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="weapon-bar">
+        <button class="weapon-btn active" id="w1" onclick="switchWeapon(1)">[1] 正弦波斩 (sin)</button>
+        <button class="weapon-btn" id="w2" onclick="switchWeapon(2)">[2] 绝对值切 (abs)</button>
+        <button class="weapon-btn" id="w3" onclick="switchWeapon(3)">[3] 三次甩鞭 (x³)</button>
+        <button class="weapon-btn" id="w4" onclick="switchWeapon(4)">[4] 阻尼重震 (pulse)</button>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const hpEl = document.getElementById('hp');
+
+// 让画布完美等于窗口大小
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+let score = 0;
+let hp = 100;
+let enemies = [];
+let particles = [];
+let activeBlades = []; 
+let currentWeapon = 1; 
+
+let isDragging = false;
+let startX = 0, startY = 0;
+let currentX = 0, currentY = 0;
+
+// 获取鼠标在 Canvas 内的精准坐标（修复错位核心）
+function getCanvasMousePos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+    };
+}
+
+function getWeaponY(type, lx, length) {
+    switch(type) {
+        case 1: return 45 * Math.sin(0.04 * lx);
+        case 2: return -Math.abs(lx - length/2) * 0.6 + (length * 0.3);
+        case 3: 
+            let normX = (lx - length/2) / (length/2);
+            return Math.pow(normX, 3) * 80;
+        case 4: return 80 * Math.exp(-0.008 * lx) * Math.cos(0.08 * lx);
+        default: return 0;
+    }
+}
+
+function switchWeapon(id) {
+    currentWeapon = id;
+    document.querySelectorAll('.weapon-btn').forEach((btn, idx) => {
+        if(idx === id - 1) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+}
+
+window.addEventListener('keydown', (e) => {
+    if(['1','2','3','4'].includes(e.key)) switchWeapon(parseInt(e.key));
+});
+
+function spawnEnemy() {
+    if (hp <= 0) return;
+    let x, y;
+    if (Math.random() < 0.5) {
+        x = Math.random() < 0.5 ? -20 : canvas.width + 20;
+        y = Math.random() * canvas.height;
+    } else {
+        x = Math.random() * canvas.width;
+        y = Math.random() < 0.5 ? -20 : canvas.height + 20;
+    }
+    const angle = Math.atan2(canvas.height/2 - y, canvas.width/2 - x);
+    const speed = 1.0 + Math.random() * 2.0;
+
+    enemies.push({
+        x: x, y: y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 14 + Math.random() * 14
+    });
+}
+setInterval(spawnEnemy, 600);
+
+function checkHit(enemy, blade) {
+    const dx = enemy.x - blade.x1;
+    const dy = enemy.y - blade.y1;
+    const localX = dx * Math.cos(-blade.angle) - dy * Math.sin(-blade.angle);
+    const localY = dx * Math.sin(-blade.angle) + dy * Math.cos(-blade.angle);
+
+    if (localX >= 0 && localX <= blade.length) {
+        const targetY = getWeaponY(blade.type, localX, blade.length);
+        if (Math.abs(localY - targetY) < enemy.size + 18) return true;
+    }
+    return false;
+}
+
+function createExplosion(x, y) {
+    for (let i = 0; i < 6; i++) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 5,
+            vy: (Math.random() - 0.5) * 5,
+            life: 15
+        });
+    }
+}
+
+function update() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 基地
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(canvas.width/2 - 20, canvas.height/2 - 20, 40, 40);
+    ctx.fillStyle = '#000000';
+    ctx.font = '10px monospace';
+    ctx.fillText("BASE", canvas.width/2 - 12, canvas.height/2 + 4);
+
+    // 渲染斩击
+    activeBlades = activeBlades.filter(b => b.life > 0);
+    activeBlades.forEach(b => {
+        b.life--;
+        ctx.save();
+        ctx.translate(b.x1, b.y1);
+        ctx.rotate(b.angle);
+        
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(0,0,0,${b.life / 12})`;
+        ctx.lineWidth = b.type === 4 ? 4 : 2;
+        
+        for (let lx = 0; lx <= b.length; lx += 4) {
+            let ly = getWeaponY(b.type, lx, b.length);
+            if (lx === 0) ctx.moveTo(lx, ly);
+            else ctx.lineTo(lx, ly);
+        }
+        ctx.stroke();
+        ctx.restore();
+    });
+
+    // 敌人更新
+    enemies.forEach((e, index) => {
+        e.x += e.vx; e.y += e.vy;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(e.x - e.size/2, e.y - e.size/2, e.size, e.size);
+
+        activeBlades.forEach(b => {
+            if (checkHit(e, b)) {
+                createExplosion(e.x, e.y);
+                enemies.splice(index, 1);
+                score += 10;
+                scoreEl.innerText = String(score).padStart(4, '0');
+            }
+        });
+
+        if (Math.hypot(e.x - canvas.width/2, e.y - canvas.height/2) < 30) {
+            enemies.splice(index, 1);
+            hp = Math.max(0, hp - 10);
+            hpEl.innerText = hp;
+            if (hp <= 0) {
+                alert(`防线失守！得分: ${score}`);
+                hp = 100; score = 0; enemies = [];
+                hpEl.innerText = hp; scoreEl.innerText = "0000";
+            }
+        }
+    });
+
+    // 粒子
+    particles = particles.filter(p => p.life > 0);
+    particles.forEach(p => {
+        p.x += p.vx; p.y += p.vy; p.life--;
+        ctx.fillRect(p.x, p.y, 2, 2);
+    });
+
+    // 完美的鼠标预览虚线
+    if (isDragging) {
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); 
+        ctx.moveTo(startX, startY); 
+        ctx.lineTo(currentX, currentY); 
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    requestAnimationFrame(update);
+}
+
+// 绑定修正后的鼠标事件
+canvas.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    const pos = getCanvasMousePos(e);
+    startX = pos.x; startY = pos.y;
+    currentX = startX; currentY = startY;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const pos = getCanvasMousePos(e);
+    currentX = pos.x; currentY = pos.y;
+});
+
+canvas.addEventListener('mouseup', (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    
+    const length = Math.hypot(currentX - startX, currentY - startY);
+    if (length < 15) return; // 避免原地轻点误触
+
+    activeBlades.push({
+        x1: startX, y1: startY,
+        angle: Math.atan2(currentY - startY, currentX - startX),
+        length: length * 1.4,
+        type: currentWeapon,
+        life: 12
+    });
+});
+
+update();
+</script>
+</body>
+</html>
