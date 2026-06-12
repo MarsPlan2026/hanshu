@@ -31,6 +31,10 @@
             pointer-events: none;
             z-index: 10;
         }
+        #ui-right {
+            display: flex;
+            gap: 30px;
+        }
         #weapon-bar {
             position: absolute;
             bottom: 30px;
@@ -51,10 +55,75 @@
             font-family: monospace;
             cursor: pointer;
             font-size: 13px;
+            transition: all 0.1s;
+        }
+        .weapon-btn:hover {
+            background: #f0f0f0;
         }
         .weapon-btn.active {
             background: #000000;
             color: #ffffff;
+        }
+        #game-over-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        #game-over-overlay.active {
+            display: flex;
+        }
+        .game-over-box {
+            background: #ffffff;
+            padding: 40px;
+            border: 3px solid #000000;
+            text-align: center;
+            font-family: monospace;
+            font-size: 24px;
+        }
+        .game-over-box h1 {
+            margin: 0 0 20px 0;
+            font-size: 32px;
+        }
+        .game-over-box p {
+            margin: 10px 0;
+        }
+        .game-over-box button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            border: 2px solid #000000;
+            background: #ffffff;
+            cursor: pointer;
+            font-family: monospace;
+        }
+        .game-over-box button:hover {
+            background: #000000;
+            color: #ffffff;
+        }
+        #pause-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            font-weight: bold;
+            pointer-events: none;
+            display: none;
+            z-index: 50;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px 40px;
+            border: 3px solid #000000;
+        }
+        #pause-indicator.active {
+            display: block;
         }
         canvas {
             display: block;
@@ -64,49 +133,98 @@
     </style>
 </head>
 <body>
-
     <div id="ui">
         <div>SCORE: <span id="score">0000</span></div>
-        <div>HP: <span id="hp">100</span>%</div>
+        <div id="ui-right">
+            <div>WAVE: <span id="wave">1</span></div>
+            <div>HP: <span id="hp">100</span>%</div>
+        </div>
     </div>
 
     <canvas id="gameCanvas"></canvas>
 
+    <div id="pause-indicator">⏸ PAUSED</div>
+
+    <div id="game-over-overlay">
+        <div class="game-over-box">
+            <h1>防线失守</h1>
+            <p>最终得分: <span id="final-score">0</span></p>
+            <p>完成波数: <span id="final-wave">1</span></p>
+            <p>生存时间: <span id="survival-time">0</span>秒</p>
+            <button onclick="location.reload()">重新开始</button>
+        </div>
+    </div>
+
     <div id="weapon-bar">
-        <button class="weapon-btn active" id="w1" onclick="switchWeapon(1)">[1] 正弦波斩 (sin)</button>
-        <button class="weapon-btn" id="w2" onclick="switchWeapon(2)">[2] 绝对值切 (abs)</button>
-        <button class="weapon-btn" id="w3" onclick="switchWeapon(3)">[3] 三次甩鞭 (x³)</button>
-        <button class="weapon-btn" id="w4" onclick="switchWeapon(4)">[4] 阻尼重震 (pulse)</button>
+        <button class="weapon-btn active" id="w1" data-weapon="1">[1] 正弦波斩 (sin)</button>
+        <button class="weapon-btn" id="w2" data-weapon="2">[2] 绝对值切 (abs)</button>
+        <button class="weapon-btn" id="w3" data-weapon="3">[3] 三次甩鞭 (x³)</button>
+        <button class="weapon-btn" id="w4" data-weapon="4">[4] 阻尼重震 (pulse)</button>
     </div>
 
 <script>
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-const scoreEl = document.getElementById('score');
-const hpEl = document.getElementById('hp');
+// ============ 配置常量 ============
+const CONFIG = {
+    INITIAL_SPAWN_INTERVAL: 600,
+    MIN_SPAWN_INTERVAL: 200,
+    SPAWN_INTERVAL_DECREASE: 10,
+    INITIAL_ENEMY_SPEED: 1.0,
+    SPEED_INCREASE_PER_WAVE: 0.3,
+    BLADE_LIFETIME: 12,
+    MIN_DRAG_DISTANCE: 15,
+    PARTICLE_COUNT_MAX: 200,
+    ENEMY_COUNT_MAX: 150,
+    BASE_SIZE: 20,
+    HIT_MARGIN: 18
+};
 
-// 让画布完美等于窗口大小
+// ============ 游戏状态 ============
+const gameState = {
+    canvas: document.getElementById('gameCanvas'),
+    ctx: null,
+    score: 0,
+    hp: 100,
+    wave: 1,
+    isPaused: false,
+    startTime: Date.now(),
+    enemies: [],
+    particles: [],
+    activeBlades: [],
+    currentWeapon: 1,
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    spawnInterval: CONFIG.INITIAL_SPAWN_INTERVAL,
+    lastSpawnTime: 0,
+    enemySpeed: CONFIG.INITIAL_ENEMY_SPEED
+};
+
+gameState.ctx = gameState.canvas.getContext('2d');
+
+// ============ UI 元素缓存 ============
+const UI = {
+    score: document.getElementById('score'),
+    hp: document.getElementById('hp'),
+    wave: document.getElementById('wave'),
+    pauseIndicator: document.getElementById('pause-indicator'),
+    gameOverOverlay: document.getElementById('game-over-overlay'),
+    finalScore: document.getElementById('final-score'),
+    finalWave: document.getElementById('final-wave'),
+    survivalTime: document.getElementById('survival-time')
+};
+
+// ============ 工具函数 ============
 function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    gameState.canvas.width = window.innerWidth;
+    gameState.canvas.height = window.innerHeight;
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
-let score = 0;
-let hp = 100;
-let enemies = [];
-let particles = [];
-let activeBlades = []; 
-let currentWeapon = 1; 
-
-let isDragging = false;
-let startX = 0, startY = 0;
-let currentX = 0, currentY = 0;
-
-// 获取鼠标在 Canvas 内的精准坐标（修复错位核心）
 function getCanvasMousePos(e) {
-    const rect = canvas.getBoundingClientRect();
+    const rect = gameState.canvas.getBoundingClientRect();
     return {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top
@@ -126,38 +244,70 @@ function getWeaponY(type, lx, length) {
 }
 
 function switchWeapon(id) {
-    currentWeapon = id;
-    document.querySelectorAll('.weapon-btn').forEach((btn, idx) => {
-        if(idx === id - 1) btn.classList.add('active');
+    gameState.currentWeapon = id;
+    document.querySelectorAll('.weapon-btn').forEach((btn) => {
+        const weaponId = parseInt(btn.dataset.weapon);
+        if(weaponId === id) btn.classList.add('active');
         else btn.classList.remove('active');
     });
 }
 
-window.addEventListener('keydown', (e) => {
-    if(['1','2','3','4'].includes(e.key)) switchWeapon(parseInt(e.key));
-});
+function updateUI() {
+    UI.score.innerText = String(gameState.score).padStart(4, '0');
+    UI.hp.innerText = gameState.hp;
+    UI.wave.innerText = gameState.wave;
+}
 
+function increaseDifficulty() {
+    gameState.wave++;
+    gameState.spawnInterval = Math.max(
+        CONFIG.MIN_SPAWN_INTERVAL,
+        gameState.spawnInterval - CONFIG.SPAWN_INTERVAL_DECREASE
+    );
+    gameState.enemySpeed = CONFIG.INITIAL_ENEMY_SPEED + 
+                           (gameState.wave - 1) * CONFIG.SPEED_INCREASE_PER_WAVE;
+    updateUI();
+}
+
+function endGame() {
+    const survivalSeconds = Math.floor((Date.now() - gameState.startTime) / 1000);
+    UI.finalScore.innerText = gameState.score;
+    UI.finalWave.innerText = gameState.wave;
+    UI.survivalTime.innerText = survivalSeconds;
+    UI.gameOverOverlay.classList.add('active');
+}
+
+function togglePause() {
+    gameState.isPaused = !gameState.isPaused;
+    UI.pauseIndicator.classList.toggle('active');
+}
+
+// ============ 游戏逻辑 ============
 function spawnEnemy() {
-    if (hp <= 0) return;
+    if (gameState.hp <= 0 || gameState.isPaused) return;
+    
+    // 限制敌人数量，防止堆积
+    if (gameState.enemies.length >= CONFIG.ENEMY_COUNT_MAX) return;
+
     let x, y;
     if (Math.random() < 0.5) {
-        x = Math.random() < 0.5 ? -20 : canvas.width + 20;
-        y = Math.random() * canvas.height;
+        x = Math.random() < 0.5 ? -20 : gameState.canvas.width + 20;
+        y = Math.random() * gameState.canvas.height;
     } else {
-        x = Math.random() * canvas.width;
-        y = Math.random() < 0.5 ? -20 : canvas.height + 20;
+        x = Math.random() * gameState.canvas.width;
+        y = Math.random() < 0.5 ? -20 : gameState.canvas.height + 20;
     }
-    const angle = Math.atan2(canvas.height/2 - y, canvas.width/2 - x);
-    const speed = 1.0 + Math.random() * 2.0;
+    
+    const angle = Math.atan2(gameState.canvas.height/2 - y, gameState.canvas.width/2 - x);
+    const speed = gameState.enemySpeed + Math.random() * 1.5;
 
-    enemies.push({
+    gameState.enemies.push({
         x: x, y: y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         size: 14 + Math.random() * 14
     });
 }
-setInterval(spawnEnemy, 600);
 
 function checkHit(enemy, blade) {
     const dx = enemy.x - blade.x1;
@@ -167,14 +317,17 @@ function checkHit(enemy, blade) {
 
     if (localX >= 0 && localX <= blade.length) {
         const targetY = getWeaponY(blade.type, localX, blade.length);
-        if (Math.abs(localY - targetY) < enemy.size + 18) return true;
+        if (Math.abs(localY - targetY) < enemy.size + CONFIG.HIT_MARGIN) return true;
     }
     return false;
 }
 
 function createExplosion(x, y) {
+    // 限制粒子数量
+    if (gameState.particles.length >= CONFIG.PARTICLE_COUNT_MAX) return;
+    
     for (let i = 0; i < 6; i++) {
-        particles.push({
+        gameState.particles.push({
             x: x, y: y,
             vx: (Math.random() - 0.5) * 5,
             vy: (Math.random() - 0.5) * 5,
@@ -184,26 +337,42 @@ function createExplosion(x, y) {
 }
 
 function update() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (gameState.isPaused) {
+        requestAnimationFrame(update);
+        return;
+    }
 
-    // 基地
+    const ctx = gameState.ctx;
+    ctx.clearRect(0, 0, gameState.canvas.width, gameState.canvas.height);
+
+    // 处理敌人生成（时间驱动而非间隔驱动）
+    const currentTime = Date.now();
+    if (currentTime - gameState.lastSpawnTime > gameState.spawnInterval) {
+        spawnEnemy();
+        gameState.lastSpawnTime = currentTime;
+    }
+
+    // 基地渲染
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
-    ctx.strokeRect(canvas.width/2 - 20, canvas.height/2 - 20, 40, 40);
+    const centerX = gameState.canvas.width / 2;
+    const centerY = gameState.canvas.height / 2;
+    ctx.strokeRect(centerX - CONFIG.BASE_SIZE, centerY - CONFIG.BASE_SIZE, 
+                   CONFIG.BASE_SIZE * 2, CONFIG.BASE_SIZE * 2);
     ctx.fillStyle = '#000000';
     ctx.font = '10px monospace';
-    ctx.fillText("BASE", canvas.width/2 - 12, canvas.height/2 + 4);
+    ctx.fillText("BASE", centerX - 12, centerY + 4);
 
     // 渲染斩击
-    activeBlades = activeBlades.filter(b => b.life > 0);
-    activeBlades.forEach(b => {
+    gameState.activeBlades = gameState.activeBlades.filter(b => b.life > 0);
+    gameState.activeBlades.forEach(b => {
         b.life--;
         ctx.save();
         ctx.translate(b.x1, b.y1);
         ctx.rotate(b.angle);
         
         ctx.beginPath();
-        ctx.strokeStyle = `rgba(0,0,0,${b.life / 12})`;
+        ctx.strokeStyle = `rgba(0,0,0,${b.life / CONFIG.BLADE_LIFETIME})`;
         ctx.lineWidth = b.type === 4 ? 4 : 2;
         
         for (let lx = 0; lx <= b.length; lx += 4) {
@@ -215,49 +384,65 @@ function update() {
         ctx.restore();
     });
 
-    // 敌人更新
-    enemies.forEach((e, index) => {
-        e.x += e.vx; e.y += e.vy;
+    // 敌人更新与碰撞检测
+    for (let i = gameState.enemies.length - 1; i >= 0; i--) {
+        const e = gameState.enemies[i];
+        e.x += e.vx;
+        e.y += e.vy;
+
+        // 渲染敌人
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(e.x - e.size/2, e.y - e.size/2, e.size, e.size);
 
-        activeBlades.forEach(b => {
-            if (checkHit(e, b)) {
-                createExplosion(e.x, e.y);
-                enemies.splice(index, 1);
-                score += 10;
-                scoreEl.innerText = String(score).padStart(4, '0');
-            }
-        });
-
-        if (Math.hypot(e.x - canvas.width/2, e.y - canvas.height/2) < 30) {
-            enemies.splice(index, 1);
-            hp = Math.max(0, hp - 10);
-            hpEl.innerText = hp;
-            if (hp <= 0) {
-                alert(`防线失守！得分: ${score}`);
-                hp = 100; score = 0; enemies = [];
-                hpEl.innerText = hp; scoreEl.innerText = "0000";
+        // 碰撞检测
+        let hit = false;
+        for (let j = 0; j < gameState.activeBlades.length; j++) {
+            if (checkHit(e, gameState.activeBlades[j])) {
+                hit = true;
+                break;
             }
         }
-    });
 
-    // 粒子
-    particles = particles.filter(p => p.life > 0);
-    particles.forEach(p => {
-        p.x += p.vx; p.y += p.vy; p.life--;
+        if (hit) {
+            createExplosion(e.x, e.y);
+            gameState.enemies.splice(i, 1);
+            gameState.score += 10;
+            updateUI();
+        } else if (Math.hypot(e.x - centerX, e.y - centerY) < CONFIG.BASE_SIZE + 15) {
+            // 敌人到达基地
+            gameState.enemies.splice(i, 1);
+            gameState.hp = Math.max(0, gameState.hp - 10);
+            updateUI();
+            
+            if (gameState.hp <= 0) {
+                endGame();
+            }
+        } else if (e.x < -50 || e.x > gameState.canvas.width + 50 ||
+                   e.y < -50 || e.y > gameState.canvas.height + 50) {
+            // 清除超出边界太远的敌人
+            gameState.enemies.splice(i, 1);
+        }
+    }
+
+    // 粒子更新
+    gameState.particles = gameState.particles.filter(p => p.life > 0);
+    gameState.particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        ctx.fillStyle = `rgba(0,0,0,${p.life / 15})`;
         ctx.fillRect(p.x, p.y, 2, 2);
     });
 
-    // 完美的鼠标预览虚线
-    if (isDragging) {
+    // 鼠标预览虚线
+    if (gameState.isDragging) {
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath(); 
-        ctx.moveTo(startX, startY); 
-        ctx.lineTo(currentX, currentY); 
+        ctx.moveTo(gameState.startX, gameState.startY); 
+        ctx.lineTo(gameState.currentX, gameState.currentY); 
         ctx.stroke();
         ctx.setLineDash([]);
     }
@@ -265,36 +450,100 @@ function update() {
     requestAnimationFrame(update);
 }
 
-// 绑定修正后的鼠标事件
-canvas.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    const pos = getCanvasMousePos(e);
-    startX = pos.x; startY = pos.y;
-    currentX = startX; currentY = startY;
-});
-
-canvas.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    const pos = getCanvasMousePos(e);
-    currentX = pos.x; currentY = pos.y;
-});
-
-canvas.addEventListener('mouseup', (e) => {
-    if (!isDragging) return;
-    isDragging = false;
-    
-    const length = Math.hypot(currentX - startX, currentY - startY);
-    if (length < 15) return; // 避免原地轻点误触
-
-    activeBlades.push({
-        x1: startX, y1: startY,
-        angle: Math.atan2(currentY - startY, currentX - startX),
-        length: length * 1.4,
-        type: currentWeapon,
-        life: 12
+// ============ 事件监听 ============
+document.querySelectorAll('.weapon-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const weaponId = parseInt(btn.dataset.weapon);
+        switchWeapon(weaponId);
     });
 });
 
+window.addEventListener('keydown', (e) => {
+    if(['1','2','3','4'].includes(e.key)) switchWeapon(parseInt(e.key));
+    if(e.key === ' ') {
+        e.preventDefault();
+        togglePause();
+    }
+    // 每50次击杀自动升级波数
+    if(e.key === 'w' && gameState.score % 500 === 0 && gameState.score > 0) {
+        increaseDifficulty();
+    }
+});
+
+gameState.canvas.addEventListener('mousedown', (e) => {
+    if (gameState.isPaused) return;
+    gameState.isDragging = true;
+    const pos = getCanvasMousePos(e);
+    gameState.startX = pos.x;
+    gameState.startY = pos.y;
+    gameState.currentX = gameState.startX;
+    gameState.currentY = gameState.startY;
+});
+
+gameState.canvas.addEventListener('mousemove', (e) => {
+    if (!gameState.isDragging) return;
+    const pos = getCanvasMousePos(e);
+    gameState.currentX = pos.x;
+    gameState.currentY = pos.y;
+});
+
+gameState.canvas.addEventListener('mouseup', (e) => {
+    if (!gameState.isDragging) return;
+    gameState.isDragging = false;
+    
+    const length = Math.hypot(gameState.currentX - gameState.startX, 
+                              gameState.currentY - gameState.startY);
+    if (length < CONFIG.MIN_DRAG_DISTANCE) return;
+
+    gameState.activeBlades.push({
+        x1: gameState.startX,
+        y1: gameState.startY,
+        angle: Math.atan2(gameState.currentY - gameState.startY, 
+                         gameState.currentX - gameState.startX),
+        length: length * 1.4,
+        type: gameState.currentWeapon,
+        life: CONFIG.BLADE_LIFETIME
+    });
+});
+
+// 触摸支持（移动设备）
+gameState.canvas.addEventListener('touchstart', (e) => {
+    if (gameState.isPaused) return;
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousedown', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    gameState.canvas.dispatchEvent(mouseEvent);
+});
+
+gameState.canvas.addEventListener('touchmove', (e) => {
+    if (!gameState.isDragging) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousemove', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    gameState.canvas.dispatchEvent(mouseEvent);
+});
+
+gameState.canvas.addEventListener('touchend', (e) => {
+    const mouseEvent = new MouseEvent('mouseup', {});
+    gameState.canvas.dispatchEvent(mouseEvent);
+});
+
+// 自动难度调整（每50个击杀升级波数）
+setInterval(() => {
+    if (gameState.score > 0 && gameState.score % 500 === 0) {
+        const currentWave = Math.floor(gameState.score / 500) + 1;
+        if (currentWave > gameState.wave) {
+            increaseDifficulty();
+        }
+    }
+}, 100);
+
+updateUI();
 update();
 </script>
 </body>
